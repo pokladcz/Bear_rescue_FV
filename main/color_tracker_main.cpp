@@ -23,7 +23,9 @@
 #include "camera.hpp"
 #include "cv_detect.hpp"
 #include "bear_detection.hpp"
-
+//#include "LogoSokolska.c"
+//#include "Logo_s.c"
+#include "sokolska_logo.c" // Předpokládám, že Logo_s je v tomto souboru
 // ...nyní můžeš používat vidime_medveda...
 ///////////////////////
 
@@ -50,33 +52,39 @@ typedef struct __attribute__((packed)) {
     uint16_t x;
     uint16_t y;
     bool camera;
+    bool on;
     int16_t angle;      // Úhel ve stupních ×10
     uint16_t distance;  // Délka v mm
     uint16_t max_distance; // Maximální možná délka v mm
 } Message;
 // ...existing code...
-static Message msg = {0, 0, false, 0, 0, 0}; // Inicializace struktury
+static Message msg = {0, 0, false, false, 0, 0, 0}; // Inicializace struktury
 
 static void send_struct(const Message *m)
 {
+    // Magic bytes (hlavička)
     uint8_t hdr[2] = { SYNC0, SYNC1 };
     uart_write_bytes(UART_PORT, (const char*)hdr, 2);
+
+    // Payload (struktura)
     uart_write_bytes(UART_PORT, (const char*)m, sizeof(*m));
 
+    // Jednoduchý checksum (součet všech bajtů payloadu)
     uint8_t checksum = 0;
     const uint8_t *payload = (const uint8_t *)m;
     for (size_t i = 0; i < sizeof(*m); ++i) {
         checksum += payload[i];
     }
     uart_write_bytes(UART_PORT, (const char*)&checksum, 1);
-
     char buf[128];
-    snprintf(buf, sizeof(buf), "UART: x=%u y=%u camera=%u angle=%d dist=%umm max=%umm chksum=0x%02X",
-         m->x, m->y, m->camera, m->angle, m->distance, m->max_distance, checksum);
-    ESP_LOGI("UART", "Sent struct: x=%u y=%u camera=%u angle=%d dist=%u max=%u checksum=0x%02X",
-         m->x, m->y, m->camera, m->angle, m->distance, m->max_distance, checksum);
+    snprintf(buf, sizeof(buf), "UART: x=%u y=%u camera=%u on=%u angle=%d dist=%umm max=%umm chksum=0x%02X",
+         m->x, m->y, m->camera, m->on, m->angle, m->distance, m->max_distance, checksum);
+    ESP_LOGI("UART", "Sent struct: x=%u y=%u camera=%u on=%u angle=%d dist=%u max=%u checksum=0x%02X",
+         m->x, m->y, m->camera, m->on, m->angle, m->distance, m->max_distance, checksum);
     if(uart_log_label) lv_label_set_text(uart_log_label, buf);
 }
+
+
 typedef struct __attribute__((packed)) {
     bool esp_ready;
 } EspReadyMsg;
@@ -145,7 +153,7 @@ static void create_grid(lv_obj_t * parent)
 
         lv_obj_t * line_h = lv_line_create(parent);
         lv_line_set_points(line_h, grid_h_points[idx], 2);
-        lv_obj_set_style_line_color(line_h, lv_color_hex(0x888888), 0); // šedá
+        lv_obj_set_style_line_color(line_h, lv_color_hex(0xFAFAFA), 0); // šedá
         lv_obj_set_style_line_width(line_h, 2, 0);
         lv_obj_set_style_line_opa(line_h, LV_OPA_COVER, 0);
 
@@ -157,7 +165,7 @@ static void create_grid(lv_obj_t * parent)
 
         lv_obj_t * line_v = lv_line_create(parent);
         lv_line_set_points(line_v, grid_v_points[idx], 2);
-        lv_obj_set_style_line_color(line_v, lv_color_hex(0x888888), 0); // šedá
+        lv_obj_set_style_line_color(line_v, lv_color_hex(0xFAFAFA), 0); // šedá
         lv_obj_set_style_line_width(line_v, 2, 0);
         lv_obj_set_style_line_opa(line_v, LV_OPA_COVER, 0);
     }
@@ -218,12 +226,16 @@ static void grid_area_event_cb(lv_event_t *e)
 static void btn_camera_event_cb(lv_event_t *e)
 {
     lv_label_set_text(xy_label, "jedu na kameru.");
+    msg.camera = true; // Nastavíme, že kamera je zapnutá
+    send_struct(&msg); // Odeslat strukturu s informacemi
+    msg.camera = false; // Resetovat flag pro další použití
     // Spustit detekci kamerou (to co bylo v extern "C" void app_main)
     bool is_rbcx_ready = wait_for_esp_ready();
     if (is_rbcx_ready) {
         ESP_LOGI("RBCX", "dojelo na pozici.");
     }
-    ESP_ERROR_CHECK(lcd_init(&display_panel));
+    //ESP_ERROR_CHECK(lcd_init(&display_panel));
+    bsp_display_brightness_set(0);
     auto cam = new Camera(VIDEO_PIX_FMT_RGB888, 4, V4L2_MEMORY_MMAP, true);
     auto cv_detect = new CvDetect(display_panel, cam);
     cv_detect->run();
@@ -262,11 +274,13 @@ extern "C" void app_main(void)
     lv_label_set_text(xy_label, "X: \nY: ");
     lv_obj_set_style_text_color(xy_label, lv_palette_main(LV_PALETTE_BLUE), 0);
 
-    // Tlačítko "Camera" - větší
+    // Tlačítko "Camera" - vysoké, skoro průhledné
     lv_obj_t * btn_camera = lv_btn_create(lv_scr_act());
-    lv_obj_set_size(btn_camera, 300, 80);
-    lv_obj_align(btn_camera, LV_ALIGN_TOP_RIGHT, -90, 220);
+    lv_obj_set_size(btn_camera, 300, 580); // výška téměř celá polovina (při výšce 600 px)
+    lv_obj_align(btn_camera, LV_ALIGN_TOP_RIGHT, -90, 10); // posunout nahoru
     lv_obj_set_style_bg_color(btn_camera, lv_palette_main(LV_PALETTE_RED), 0);
+    lv_obj_set_style_bg_opa(btn_camera, LV_OPA_20, 0); // téměř průhledné (0-255, 20 je slabé)
+    lv_obj_set_style_border_width(btn_camera, 0, 0); // bez rámečku
     lv_obj_add_event_cb(btn_camera, btn_camera_event_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t * label_camera = lv_label_create(btn_camera);
     lv_label_set_text(label_camera, "Camera");
@@ -278,6 +292,11 @@ extern "C" void app_main(void)
     lv_obj_set_width(uart_log_label, 300);
     lv_label_set_text(uart_log_label, "UART: ---");
 
+    // ...existing code...
+    lv_obj_t * logo_img = lv_img_create(lv_scr_act());
+    lv_img_set_src(logo_img, &Logo_s); // název proměnné z .c souboru
+    lv_obj_align(logo_img, LV_ALIGN_CENTER, -215, 0);
+    // ...existing code...
 
     init();
     bsp_display_unlock();
