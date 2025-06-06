@@ -1,0 +1,5 @@
+build/
+managed_components/
+**/squareline/backup/
+**/squareline/autosave/
+components/lvgl/
